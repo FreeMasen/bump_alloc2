@@ -1,13 +1,4 @@
-#[cfg(windows)]
-extern crate kernel32;
-
-#[cfg(windows)]
-extern crate winapi;
-
-#[cfg(target_os = "linux")]
-extern crate libc;
-
-use std::alloc::{handle_alloc_error, GlobalAlloc, Layout};
+use std::alloc::{GlobalAlloc, Layout, handle_alloc_error};
 use std::cell::UnsafeCell;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -30,10 +21,12 @@ pub struct BumpAlloc {
 unsafe impl Sync for BumpAlloc {}
 
 impl BumpAlloc {
+    /// Create a new instance of the bump allocator with a default initial size of 1 gigabyte
     pub const fn new() -> BumpAlloc {
-        BumpAlloc::with_size(1024 * 1024 * 1024) // Default to one gigabyte.
+        BumpAlloc::with_size(1024 * 1024 * 1024)
     }
 
+    /// Create a new instance of the bump allocator with the provided size
     pub const fn with_size(size: usize) -> BumpAlloc {
         BumpAlloc {
             inner: UnsafeCell::new(Inner {
@@ -64,43 +57,47 @@ unsafe fn mmap_wrapper(size: usize) -> *mut u8 {
 
 #[cfg(all(unix, not(target_os = "android")))]
 unsafe fn mmap_wrapper(size: usize) -> *mut u8 {
-    libc::mmap(
-        null_mut(),
-        size,
-        libc::PROT_READ | libc::PROT_WRITE,
-        libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
-        -1,
-        0,
-    ) as *mut u8
+    unsafe {
+        libc::mmap(
+            null_mut(),
+            size,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        ) as *mut u8
+    }
 }
 
 unsafe impl GlobalAlloc for BumpAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let inner = &mut *self.inner.get();
+        unsafe {
+            let inner = &mut *self.inner.get();
 
-        // If initializing is true it means we need to do the original mmap.
-        if inner.initializing.swap(false, Ordering::Relaxed) {
-            inner.mmap = mmap_wrapper(self.size);
+            // If initializing is true it means we need to do the original mmap.
+            if inner.initializing.swap(false, Ordering::Relaxed) {
+                inner.mmap = mmap_wrapper(self.size);
 
-            if (*inner.mmap as isize) == -1isize {
+                if (*inner.mmap as isize) == -1isize {
+                    handle_alloc_error(layout);
+                }
+            } else {
+                // Spin loop waiting on the mmap to be ready.
+                while 0 == inner.offset.load(Ordering::Relaxed) {}
+            }
+
+            let bytes_required = align_to(layout.size() + layout.align(), layout.align());
+
+            let my_offset = inner.offset.fetch_add(bytes_required, Ordering::Relaxed);
+
+            let aligned_offset = align_to(my_offset, layout.align());
+
+            if (aligned_offset + layout.size()) > self.size {
                 handle_alloc_error(layout);
             }
-        } else {
-            // Spin loop waiting on the mmap to be ready.
-            while 0 == inner.offset.load(Ordering::Relaxed) {}
+
+            inner.mmap.offset(aligned_offset as isize)
         }
-
-        let bytes_required = align_to(layout.size() + layout.align(), layout.align());
-
-        let my_offset = inner.offset.fetch_add(bytes_required, Ordering::Relaxed);
-
-        let aligned_offset = align_to(my_offset, layout.align());
-
-        if (aligned_offset + layout.size()) > self.size {
-            handle_alloc_error(layout);
-        }
-
-        inner.mmap.offset(aligned_offset as isize)
     }
 
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
