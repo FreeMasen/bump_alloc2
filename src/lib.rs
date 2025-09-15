@@ -1,7 +1,9 @@
 use std::alloc::{GlobalAlloc, Layout, handle_alloc_error};
 use std::cell::UnsafeCell;
-use std::ptr::null_mut;
+use std::ptr::{NonNull, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+use allocator_api2::alloc::{AllocError, Allocator};
 
 fn align_to(size: usize, align: usize) -> usize {
     (size + align - 1) & !(align - 1)
@@ -71,6 +73,16 @@ unsafe fn mmap_wrapper(size: usize) -> *mut u8 {
 
 unsafe impl GlobalAlloc for BumpAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        Allocator::allocate(&self, layout)
+            .map(|v| v.as_ptr().cast())
+            .unwrap_or_else(|_| null_mut())
+    }
+
+    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
+}
+
+unsafe impl Allocator for BumpAlloc {
+    fn allocate(&self, layout: Layout) -> Result<std::ptr::NonNull<[u8]>, AllocError> {
         unsafe {
             let inner = &mut *self.inner.get();
 
@@ -96,9 +108,11 @@ unsafe impl GlobalAlloc for BumpAlloc {
                 handle_alloc_error(layout);
             }
 
-            inner.mmap.offset(aligned_offset as isize)
+            let ret_ptr = inner.mmap.offset(aligned_offset as isize);
+            let nn = NonNull::new(ret_ptr).ok_or(AllocError)?;
+            Ok(NonNull::slice_from_raw_parts(nn, layout.size()))
         }
     }
 
-    unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
+    unsafe fn deallocate(&self, _ptr: std::ptr::NonNull<u8>, _layout: Layout) {}
 }

@@ -1,3 +1,5 @@
+// not all fns here will be used so we disable that for this module.
+#![allow(unused)]
 use std::{collections::BTreeMap, u8};
 
 #[derive(Debug, Default)]
@@ -17,26 +19,6 @@ impl Something {
             field3: u16::from(v),
             field4: v,
             field5: v != 0,
-        }
-    }
-
-    pub fn new_saturating_uniform(v: u16) -> Self {
-        Self {
-            field1: u64::from(v),
-            field2: u32::from(v),
-            field3: u16::from(v),
-            field4: u8::try_from(v).unwrap_or(u8::MAX),
-            field5: v != 0,
-        }
-    }
-
-    pub fn new_random() -> Self {
-        Self {
-            field1: rand::random(),
-            field2: rand::random(),
-            field3: rand::random(),
-            field4: rand::random(),
-            field5: rand::random(),
         }
     }
 }

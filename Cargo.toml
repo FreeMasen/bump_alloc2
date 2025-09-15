@@ -10,6 +10,7 @@ readme = "README.md"
 keywords = ["bump", "allocator", "GlobalAlloc", "global_allocator"]
 
 [dependencies]
+allocator-api2 = "0.3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.46"
@@ -18,6 +19,7 @@ libc = "0.2.46"
 winapi = { version = "0.3.6", features = ["minwindef", "winnt"] }
 kernel32-sys = "0.2.1"
 
-
-[dev-dependencies]
-rand = "0.9"
+[features]
+default = [ "std" ]
+alloc = [ "allocator-api2/alloc" ]
+std = [ "alloc", "allocator-api2/std" ]
