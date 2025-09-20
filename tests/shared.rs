@@ -1,6 +1,6 @@
 // not all fns here will be used so we disable that for this module.
 #![allow(unused)]
-use std::{collections::BTreeMap, u16, u8};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Default)]
 pub struct Something {
@@ -77,7 +77,7 @@ impl From<usize> for Something {
 #[track_caller]
 pub fn vec100() {
     let v = (0u8..100)
-        .map(|i| Something::from(i))
+        .map(Something::from)
         .collect::<Vec<_>>();
     for (i, s) in v.into_iter().enumerate() {
         assert_eq!(i as u64, s.field1);
@@ -97,7 +97,7 @@ pub fn btree_map_100() {
         assert_eq!(i as u64, s.field1);
         assert_eq!(i as u32, s.field2);
         assert_eq!(i as u16, s.field3);
-        assert_eq!(i as u8, s.field4);
+        assert_eq!(i, s.field4);
         assert_eq!(i > 0, s.field5);
     }
 }
@@ -110,7 +110,7 @@ pub fn box_100() {
 #[track_caller]
 pub fn vec_u16_max() {
     let v = (0..u16::MAX)
-        .map(|i| Something::from(i))
+        .map(Something::from)
         .collect::<Vec<_>>();
     for (i, s) in v.into_iter().enumerate() {
         assert_eq!(i as u64, s.field1);
@@ -129,7 +129,7 @@ pub fn btree_map_u16_max() {
     for (i, s) in map.into_iter() {
         assert_eq!(i as u64, s.field1);
         assert_eq!(i as u32, s.field2);
-        assert_eq!(i as u16, s.field3);
+        assert_eq!(i, s.field3);
         assert_eq!(u8::try_from(i).unwrap_or(u8::MAX), s.field4);
         assert_eq!(i > 0, s.field5);
     }
@@ -143,11 +143,11 @@ pub fn box_u16_max() {
 pub fn boxes<const N: usize>() {
     let boxes: &mut [Option<Box<Something>>; N] =
         &mut [const { None }; N];
-    for i in 0..N {
-        boxes[i as usize] = Some(Box::new(Something::from(i)));
+    for (i, b) in boxes.iter_mut().enumerate() {
+        *b= Some(Box::new(Something::from(i)));
     }
 
-    for (i, s) in boxes.into_iter().enumerate() {
+    for (i, s) in boxes.iter_mut().enumerate() {
         let s = s.as_ref().unwrap();
         assert_eq!(i as u64, s.field1);
         assert_eq!(i as u32, s.field2);

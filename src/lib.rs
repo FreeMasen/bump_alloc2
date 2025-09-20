@@ -20,6 +20,12 @@ pub struct BumpAlloc {
     size: usize,
 }
 
+impl Default for BumpAlloc {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 unsafe impl Sync for BumpAlloc {}
 
 impl BumpAlloc {
@@ -108,7 +114,7 @@ unsafe impl Allocator for BumpAlloc {
                 handle_alloc_error(layout);
             }
 
-            let ret_ptr = inner.mmap.offset(aligned_offset as isize);
+            let ret_ptr = inner.mmap.add(aligned_offset);
             let nn = NonNull::new(ret_ptr).ok_or(AllocError)?;
             Ok(NonNull::slice_from_raw_parts(nn, layout.size()))
         }
