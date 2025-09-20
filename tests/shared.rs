@@ -1,6 +1,6 @@
 // not all fns here will be used so we disable that for this module.
 #![allow(unused)]
-use std::{collections::BTreeMap, u8};
+use std::{collections::BTreeMap, u16, u8};
 
 #[derive(Debug, Default)]
 pub struct Something {
@@ -28,10 +28,49 @@ impl From<u16> for Something {
         Self {
             field1: u64::from(v),
             field2: u32::from(v),
-            field3: u16::from(v),
+            field3: v,
             field4: u8::try_from(v).unwrap_or(u8::MAX),
             field5: v != 0,
         }
+    }
+}
+
+impl From<u32> for Something {
+    fn from(v: u32) -> Self {
+        Self {
+            field1: u64::from(v),
+            field2: v,
+            field3: u16::try_from(v).unwrap_or(u16::MAX),
+            field4: u8::try_from(v).unwrap_or(u8::MAX),
+            field5: v != 0,
+        }
+    }
+}
+
+impl From<u64> for Something {
+    fn from(v: u64) -> Self {
+        Self {
+            field1: v,
+            field2: u32::try_from(v).unwrap_or(u32::MAX),
+            field3: u16::try_from(v).unwrap_or(u16::MAX),
+            field4: u8::try_from(v).unwrap_or(u8::MAX),
+            field5: v != 0,
+        }
+    }
+}
+
+impl From<usize> for Something {
+    fn from(value: usize) -> Self {
+        if let Ok(e) = u8::try_from(value) {
+            return Self::from(e)
+        }
+        if let Ok(s) = u16::try_from(value) {
+            return Self::from(s)
+        }
+        if let Ok(t) = u32::try_from(value) {
+            return Self::from(t)
+        }
+        Self::from(value as u64)
     }
 }
 
@@ -65,19 +104,7 @@ pub fn btree_map_100() {
 
 #[track_caller]
 pub fn box_100() {
-    let mut boxes: [Option<Box<Something>>; 100] = [const { None }; 100];
-    for i in 0..100 {
-        boxes[i] = Some(Box::new(Something::from(i as u8)));
-    }
-
-    for (i, s) in boxes.into_iter().enumerate() {
-        let s = s.unwrap();
-        assert_eq!(i as u64, s.field1);
-        assert_eq!(i as u32, s.field2);
-        assert_eq!(i as u16, s.field3);
-        assert_eq!(i as u8, s.field4);
-        assert_eq!(i > 0, s.field5);
-    }
+    boxes::<100>();
 }
 
 #[track_caller]
@@ -110,9 +137,13 @@ pub fn btree_map_u16_max() {
 
 #[track_caller]
 pub fn box_u16_max() {
-    let boxes: &mut [Option<Box<Something>>; u16::MAX as usize] =
-        &mut [const { None }; u16::MAX as usize];
-    for i in 0..u16::MAX {
+    boxes::<65535>();
+}
+
+pub fn boxes<const N: usize>() {
+    let boxes: &mut [Option<Box<Something>>; N] =
+        &mut [const { None }; N];
+    for i in 0..N {
         boxes[i as usize] = Some(Box::new(Something::from(i)));
     }
 
