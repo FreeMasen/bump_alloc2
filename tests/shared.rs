@@ -11,18 +11,6 @@ pub struct Something {
     pub field5: bool,
 }
 
-impl Something {
-    pub fn new_uniform(v: u8) -> Self {
-        Self {
-            field1: u64::from(v),
-            field2: u32::from(v),
-            field3: u16::from(v),
-            field4: v,
-            field5: v != 0,
-        }
-    }
-}
-
 impl From<u8> for Something {
     fn from(v: u8) -> Self {
         Self {
@@ -49,8 +37,8 @@ impl From<u16> for Something {
 
 #[track_caller]
 pub fn vec100() {
-    let v = (0..100)
-        .map(|i| Something::new_uniform(i))
+    let v = (0u8..100)
+        .map(|i| Something::from(i))
         .collect::<Vec<_>>();
     for (i, s) in v.into_iter().enumerate() {
         assert_eq!(i as u64, s.field1);
@@ -63,8 +51,8 @@ pub fn vec100() {
 
 #[track_caller]
 pub fn btree_map_100() {
-    let map = (0..100)
-        .map(|i| (i, Something::new_uniform(i)))
+    let map = (0u8..100)
+        .map(|i| (i, Something::from(i)))
         .collect::<BTreeMap<_, _>>();
     for (i, s) in map.into_iter() {
         assert_eq!(i as u64, s.field1);
@@ -79,7 +67,7 @@ pub fn btree_map_100() {
 pub fn box_100() {
     let mut boxes: [Option<Box<Something>>; 100] = [const { None }; 100];
     for i in 0..100 {
-        boxes[i] = Some(Box::new(Something::new_uniform(i as u8)));
+        boxes[i] = Some(Box::new(Something::from(i as u8)));
     }
 
     for (i, s) in boxes.into_iter().enumerate() {
