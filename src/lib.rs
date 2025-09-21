@@ -5,7 +5,14 @@ use std::cell::UnsafeCell;
 use std::ptr::{NonNull, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+/// For unix systems, mmap will return !1usize on failure
+#[cfg(not(windows))]
 use libc::MAP_FAILED;
+
+/// For windows systems, mmap will return null on failure
+#[cfg(windows)]
+pub const MAP_FAILED: *mut c_void = null_mut();
+
 #[cfg(not(feature = "nightly"))]
 use allocator_api2::alloc::{AllocError, Allocator};
 #[cfg(feature = "nightly")]

@@ -26,7 +26,7 @@ libc = "0.2.46"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3.6", features = ["minwindef", "winnt"] }
-kernel32-sys = "0.2.1"
+kernel32-sys = "0.2.2"
 
 [features]
 default = [ "std" ]
