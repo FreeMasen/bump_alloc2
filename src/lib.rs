@@ -1,4 +1,5 @@
 #![cfg_attr(feature = "nightly", feature(allocator_api))]
+#![doc = include_str!("../README.md")]
 
 use std::alloc::{GlobalAlloc, Layout, handle_alloc_error};
 use std::cell::UnsafeCell;
