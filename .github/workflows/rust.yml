@@ -25,3 +25,21 @@ jobs:
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+  test-nightly:
+    strategy:
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v5
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: nightly-2025-09-16
+    - name: Build
+      run: cargo +nightly build --features nightly --verbose
+    - name: Run tests
+      run: cargo +nightly test --features nightly --verbose
