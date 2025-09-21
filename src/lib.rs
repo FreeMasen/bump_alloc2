@@ -1,9 +1,14 @@
+#![cfg_attr(feature = "nightly", feature(allocator_api))]
+
 use std::alloc::{GlobalAlloc, Layout, handle_alloc_error};
 use std::cell::UnsafeCell;
 use std::ptr::{NonNull, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+#[cfg(not(feature = "nightly"))]
 use allocator_api2::alloc::{AllocError, Allocator};
+#[cfg(feature = "nightly")]
+use std::alloc::{AllocError, Allocator};
 
 fn align_to(size: usize, align: usize) -> usize {
     (size + align - 1) & !(align - 1)
