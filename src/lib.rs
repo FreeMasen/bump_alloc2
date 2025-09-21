@@ -11,7 +11,7 @@ use libc::MAP_FAILED;
 
 /// For windows systems, mmap will return null on failure
 #[cfg(windows)]
-pub const MAP_FAILED: *mut c_void = null_mut();
+pub const MAP_FAILED: *mut u8 = null_mut();
 
 #[cfg(not(feature = "nightly"))]
 use allocator_api2::alloc::{AllocError, Allocator};
@@ -68,12 +68,14 @@ type WindowsSize = u64;
 
 #[cfg(windows)]
 unsafe fn mmap_wrapper(size: usize) -> *mut u8 {
-    kernel32::VirtualAlloc(
-        null_mut(),
-        size as WindowsSize,
-        winapi::um::winnt::MEM_COMMIT | winapi::um::winnt::MEM_RESERVE,
-        winapi::um::winnt::PAGE_READWRITE,
-    ) as *mut u8
+    unsafe {
+        kernel32::VirtualAlloc(
+            null_mut(),
+            size as WindowsSize,
+            winapi::um::winnt::MEM_COMMIT | winapi::um::winnt::MEM_RESERVE,
+            winapi::um::winnt::PAGE_READWRITE,
+        ) as *mut u8
+    }
 }
 
 #[cfg(all(unix, not(target_os = "android")))]
