@@ -5,8 +5,10 @@ use std::cell::UnsafeCell;
 use std::ptr::{NonNull, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
+use allocator_api2::alloc::AllocError;
 #[cfg(not(feature = "nightly"))]
 use allocator_api2::alloc::{AllocError, Allocator};
+use libc::MAP_FAILED;
 #[cfg(feature = "nightly")]
 use std::alloc::{AllocError, Allocator};
 
@@ -84,9 +86,10 @@ unsafe fn mmap_wrapper(size: usize) -> *mut u8 {
 
 unsafe impl GlobalAlloc for BumpAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        Allocator::allocate(&self, layout)
-            .map(|v| v.as_ptr().cast())
-            .unwrap_or_else(|_| null_mut())
+        let Ok(ptr) = Allocator::allocate(&self, layout).map(|v| v.as_ptr().cast()) else {
+            handle_alloc_error(layout)
+        };
+        ptr
     }
 
     unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
@@ -101,8 +104,8 @@ unsafe impl Allocator for BumpAlloc {
             if inner.initializing.swap(false, Ordering::Relaxed) {
                 inner.mmap = mmap_wrapper(self.size);
 
-                if (*inner.mmap as isize) == -1isize {
-                    handle_alloc_error(layout);
+                if inner.mmap.cast() == MAP_FAILED {
+                    return Err(AllocError);
                 }
             } else {
                 // Spin loop waiting on the mmap to be ready.
@@ -116,7 +119,7 @@ unsafe impl Allocator for BumpAlloc {
             let aligned_offset = align_to(my_offset, layout.align());
 
             if (aligned_offset + layout.size()) > self.size {
-                handle_alloc_error(layout);
+                return Err(AllocError)
             }
 
             let ret_ptr = inner.mmap.add(aligned_offset);
