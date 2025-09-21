@@ -2,12 +2,21 @@
 license = "CC0-1.0"
 name = "bump_alloc"
 version = "0.1.0"
-authors = ["Neil Henning <sheredom@gmail.com>"]
+authors = [
+    "Neil Henning <sheredom@gmail.com>",
+    "Robert Masen <r.f.masen@gmail.com>"
+]
 edition = "2024"
-description = "global_allocator implementation of a bump allocator"
-repository = "https://github.com/sheredom/bump_alloc"
+description = "An implementation of a bump allocator using mmap"
+repository = "https://github.com/FreeMasen/bump_alloc"
 readme = "README.md"
-keywords = ["bump", "allocator", "GlobalAlloc", "global_allocator"]
+keywords = [
+    "bump", "allocator", "GlobalAlloc", 
+    "global_allocator", "Allocator"
+]
+categories = [
+    "memory-management"
+]
 
 [dependencies]
 allocator-api2 = "0.3"
