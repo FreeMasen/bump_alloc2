@@ -5,10 +5,9 @@ use std::cell::UnsafeCell;
 use std::ptr::{NonNull, null_mut};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-use allocator_api2::alloc::AllocError;
+use libc::MAP_FAILED;
 #[cfg(not(feature = "nightly"))]
 use allocator_api2::alloc::{AllocError, Allocator};
-use libc::MAP_FAILED;
 #[cfg(feature = "nightly")]
 use std::alloc::{AllocError, Allocator};
 
