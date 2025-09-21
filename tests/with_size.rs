@@ -41,3 +41,8 @@ fn vec_u16_max_works() {
 fn boxes_u16_max_works() {
     shared::box_u16_max();
 }
+
+#[test]
+fn linked_list_100() {
+    shared::linked_list::<100>();
+}

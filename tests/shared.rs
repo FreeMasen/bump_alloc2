@@ -1,8 +1,8 @@
 // not all fns here will be used so we disable that for this module.
 #![allow(unused)]
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, LinkedList};
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct Something {
     pub field1: u64,
     pub field2: u32,
@@ -62,30 +62,33 @@ impl From<u64> for Something {
 impl From<usize> for Something {
     fn from(value: usize) -> Self {
         if let Ok(e) = u8::try_from(value) {
-            return Self::from(e)
+            return Self::from(e);
         }
         if let Ok(s) = u16::try_from(value) {
-            return Self::from(s)
+            return Self::from(s);
         }
         if let Ok(t) = u32::try_from(value) {
-            return Self::from(t)
+            return Self::from(t);
         }
         Self::from(value as u64)
     }
 }
 
 #[track_caller]
-pub fn vec100() {
-    let v = (0u8..100)
-        .map(Something::from)
-        .collect::<Vec<_>>();
-    for (i, s) in v.into_iter().enumerate() {
+pub fn check_iter(i: impl Iterator<Item = Something>) {
+    for (i, s) in i.enumerate() {
         assert_eq!(i as u64, s.field1);
-        assert_eq!(i as u32, s.field2);
-        assert_eq!(i as u16, s.field3);
-        assert_eq!(i as u8, s.field4);
+        assert_eq!(u32::try_from(i).unwrap_or(u32::MAX), s.field2);
+        assert_eq!(u16::try_from(i).unwrap_or(u16::MAX), s.field3);
+        assert_eq!(u8::try_from(i).unwrap_or(u8::MAX), s.field4);
         assert_eq!(i > 0, s.field5);
     }
+}
+
+#[track_caller]
+pub fn vec100() {
+    let v = (0u8..100).map(Something::from).collect::<Vec<_>>();
+    check_iter(v.into_iter());
 }
 
 #[track_caller]
@@ -93,13 +96,7 @@ pub fn btree_map_100() {
     let map = (0u8..100)
         .map(|i| (i, Something::from(i)))
         .collect::<BTreeMap<_, _>>();
-    for (i, s) in map.into_iter() {
-        assert_eq!(i as u64, s.field1);
-        assert_eq!(i as u32, s.field2);
-        assert_eq!(i as u16, s.field3);
-        assert_eq!(i, s.field4);
-        assert_eq!(i > 0, s.field5);
-    }
+    check_iter(map.values().cloned());
 }
 
 #[track_caller]
@@ -109,16 +106,8 @@ pub fn box_100() {
 
 #[track_caller]
 pub fn vec_u16_max() {
-    let v = (0..u16::MAX)
-        .map(Something::from)
-        .collect::<Vec<_>>();
-    for (i, s) in v.into_iter().enumerate() {
-        assert_eq!(i as u64, s.field1);
-        assert_eq!(i as u32, s.field2);
-        assert_eq!(i as u16, s.field3);
-        assert_eq!(u8::try_from(i).unwrap_or(u8::MAX), s.field4);
-        assert_eq!(i > 0, s.field5);
-    }
+    let v = (0..u16::MAX).map(Something::from).collect::<Vec<_>>();
+    check_iter(v.into_iter());
 }
 
 #[track_caller]
@@ -126,13 +115,7 @@ pub fn btree_map_u16_max() {
     let map = (0..(u16::MAX))
         .map(|i| (i, Something::from(i)))
         .collect::<BTreeMap<_, _>>();
-    for (i, s) in map.into_iter() {
-        assert_eq!(i as u64, s.field1);
-        assert_eq!(i as u32, s.field2);
-        assert_eq!(i, s.field3);
-        assert_eq!(u8::try_from(i).unwrap_or(u8::MAX), s.field4);
-        assert_eq!(i > 0, s.field5);
-    }
+    check_iter(map.values().cloned());
 }
 
 #[track_caller]
@@ -140,19 +123,17 @@ pub fn box_u16_max() {
     boxes::<65535>();
 }
 
+#[track_caller]
 pub fn boxes<const N: usize>() {
-    let boxes: &mut [Option<Box<Something>>; N] =
-        &mut [const { None }; N];
+    let boxes: &mut [Option<Box<Something>>; N] = &mut [const { None }; N];
     for (i, b) in boxes.iter_mut().enumerate() {
-        *b= Some(Box::new(Something::from(i)));
+        *b = Some(Box::new(Something::from(i)));
     }
+    check_iter(boxes.iter_mut().filter_map(|b| b.take()).map(|b| *b));
+}
 
-    for (i, s) in boxes.iter_mut().enumerate() {
-        let s = s.as_ref().unwrap();
-        assert_eq!(i as u64, s.field1);
-        assert_eq!(i as u32, s.field2);
-        assert_eq!(i as u16, s.field3);
-        assert_eq!(u8::try_from(i).unwrap_or(u8::MAX), s.field4);
-        assert_eq!(i > 0, s.field5);
-    }
+#[track_caller]
+pub fn linked_list<const N: usize>() {
+    let list: LinkedList<_> = (0..N).map(Something::from).collect();
+    check_iter(list.into_iter());
 }
