@@ -1,6 +1,6 @@
 mod shared;
 
-use bump_alloc::BumpAlloc;
+use bump_alloc2::BumpAlloc;
 
 #[global_allocator]
 static A: BumpAlloc = BumpAlloc::with_size(1024 * 1024 * 4);

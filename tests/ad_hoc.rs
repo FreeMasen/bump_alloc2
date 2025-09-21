@@ -2,7 +2,7 @@
 
 #[cfg(not(feature = "nightly"))]
 use allocator_api2::{boxed::Box, vec::Vec};
-use bump_alloc::BumpAlloc;
+use bump_alloc2::BumpAlloc;
 
 use crate::shared::{Something, check_iter};
 
