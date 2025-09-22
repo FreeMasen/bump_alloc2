@@ -55,6 +55,9 @@ for `Allocator` while the `std::alloc::Allocator` remains experimental. This cra
 implementation for both `Box` and `Vec` that allow for supplying an allocator with the `new_in` API.
 
 ```rust
+#![cfg_attr(feature = "nightly", feature(allocator_api))]
+
+#[cfg(not(feature = "nightly"))]
 use allocator_api2::{boxed::Box, vec::Vec};
 use bump_alloc2::BumpAlloc;
 

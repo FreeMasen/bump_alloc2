@@ -2,9 +2,8 @@
 #![doc = include_str!("../README.md")]
 
 use std::alloc::{GlobalAlloc, Layout, handle_alloc_error};
-use std::cell::UnsafeCell;
 use std::ptr::{NonNull, null_mut};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 /// For unix systems, mmap will return !1usize on failure
 #[cfg(not(windows))]
@@ -19,19 +18,11 @@ use allocator_api2::alloc::{AllocError, Allocator};
 #[cfg(feature = "nightly")]
 use std::alloc::{AllocError, Allocator};
 
-fn align_to(size: usize, align: usize) -> usize {
-    (size + align - 1) & !(align - 1)
-}
-
-struct Inner {
-    offset: AtomicUsize,
-    mmap: *mut u8,
-    initializing: AtomicBool,
-}
-
 pub struct BumpAlloc {
-    inner: UnsafeCell<Inner>,
-    size: usize,
+    ptr: AtomicPtr<u8>,
+    remaining: AtomicUsize,
+    #[cfg(feature = "allocated")]
+    size: AtomicUsize,
 }
 
 impl Default for BumpAlloc {
@@ -51,13 +42,24 @@ impl BumpAlloc {
     /// Create a new instance of the bump allocator with the provided size
     pub const fn with_size(size: usize) -> BumpAlloc {
         BumpAlloc {
-            inner: UnsafeCell::new(Inner {
-                initializing: AtomicBool::new(true),
-                mmap: null_mut(),
-                offset: AtomicUsize::new(0),
-            }),
-            size,
+            ptr: AtomicPtr::new(null_mut()),
+            remaining: AtomicUsize::new(size),
+            #[cfg(feature = "allocated")]
+            size: AtomicUsize::new(size),
         }
+    }
+
+    /// get the allocated
+    #[cfg(feature = "allocated")]
+    pub fn allocated(&self) -> usize {
+        let sz = self.size.load(Ordering::Relaxed);
+        let rm = self.remaining.load(Ordering::Relaxed);
+        sz.wrapping_sub(rm)
+    }
+
+    /// Get the number of bytes remaining
+    pub fn remaining(&self) -> usize {
+        self.remaining.load(Ordering::Relaxed)
     }
 }
 
@@ -107,35 +109,61 @@ unsafe impl GlobalAlloc for BumpAlloc {
 unsafe impl Allocator for BumpAlloc {
     fn allocate(&self, layout: Layout) -> Result<std::ptr::NonNull<[u8]>, AllocError> {
         unsafe {
-            let inner = &mut *self.inner.get();
+            self.ptr
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |p| {
+                    if !p.is_null() {
+                        return Some(p);
+                    }
+                    let new_ptr = mmap_wrapper(self.remaining.load(Ordering::Relaxed));
+                    if new_ptr.cast() == MAP_FAILED {
+                        return None;
+                    }
+                    Some(new_ptr)
+                })
+                .map_err(|_| AllocError)?;
 
-            // If initializing is true it means we need to do the original mmap.
-            if inner.initializing.swap(false, Ordering::Relaxed) {
-                inner.mmap = mmap_wrapper(self.size);
+            let size = layout.size();
+            let align = layout.align();
 
-                if inner.mmap.cast() == MAP_FAILED {
-                    return Err(AllocError);
-                }
-            } else {
-                // Spin loop waiting on the mmap to be ready.
-                while 0 == inner.offset.load(Ordering::Relaxed) {}
-            }
+            let align_mask_to_round_down = !(align - 1);
 
-            let bytes_required = align_to(layout.size() + layout.align(), layout.align());
-
-            let my_offset = inner.offset.fetch_add(bytes_required, Ordering::Relaxed);
-
-            let aligned_offset = align_to(my_offset, layout.align());
-
-            if (aligned_offset + layout.size()) > self.size {
-                return Err(AllocError)
-            }
-
-            let ret_ptr = inner.mmap.add(aligned_offset);
+            let mut allocated = 0;
+            self.remaining
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |mut remaining| {
+                    if size > remaining {
+                        return None;
+                    }
+                    remaining -= size;
+                    remaining &= align_mask_to_round_down;
+                    allocated = remaining;
+                    Some(remaining)
+                })
+                .map_err(|_| AllocError)?;
+            let ret_ptr = self.ptr.load(Ordering::Relaxed).add(allocated);
             let nn = NonNull::new(ret_ptr).ok_or(AllocError)?;
             Ok(NonNull::slice_from_raw_parts(nn, layout.size()))
         }
     }
 
     unsafe fn deallocate(&self, _ptr: std::ptr::NonNull<u8>, _layout: Layout) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alloc_u32_state_methods() {
+        let u = u32::MAX;
+        let layout = Layout::for_value(&u);
+        let bump = BumpAlloc::with_size(layout.size());
+        unsafe {
+            let ptr = bump.alloc(layout).cast::<u32>();
+            ptr.write(u);
+            assert_eq!(Some(&u), ptr.as_ref())
+        }
+        #[cfg(feature = "allocated")]
+        assert_eq!(bump.allocated(), layout.size());
+        assert_eq!(bump.remaining(), 0);
+    }
 }
