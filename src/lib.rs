@@ -23,7 +23,6 @@ use std::alloc::{AllocError, Allocator};
 pub struct BumpAlloc {
     ptr: AtomicPtr<u8>,
     remaining: AtomicUsize,
-    #[cfg(feature = "allocated")]
     size: AtomicUsize,
 }
 
@@ -46,13 +45,11 @@ impl BumpAlloc {
         BumpAlloc {
             ptr: AtomicPtr::new(null_mut()),
             remaining: AtomicUsize::new(size),
-            #[cfg(feature = "allocated")]
             size: AtomicUsize::new(size),
         }
     }
 
     /// get the allocated
-    #[cfg(feature = "allocated")]
     pub fn allocated(&self) -> usize {
         let sz = self.size.load(Ordering::Relaxed);
         let rm = self.remaining.load(Ordering::Relaxed);
@@ -66,12 +63,18 @@ impl BumpAlloc {
 
     fn ensure_init(&self) -> Result<(), AllocError> {
         self.ptr
-            .fetch_update(Ordering::AcqRel, Ordering::Relaxed, |p| {
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |p| {
                 if !p.is_null() {
                     return Some(p);
                 }
                 unsafe {
                     let new_ptr = mmap_wrapper(self.remaining.load(Ordering::Relaxed));
+                    debug_assert_ne!(
+                        new_ptr.cast(),
+                        MAP_FAILED,
+                        "mmap failed: {:?}",
+                        std::io::Error::last_os_error()
+                    );
                     if new_ptr.cast() == MAP_FAILED {
                         return None;
                     }
@@ -88,6 +91,7 @@ impl BumpAlloc {
         self.remaining
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |mut remaining| {
                 if size > remaining {
+                    println!("would overallocate");
                     return None;
                 }
                 remaining -= size;
@@ -100,7 +104,7 @@ impl BumpAlloc {
     }
 
     fn get_ptr(&self, offset: usize) -> *mut u8 {
-        unsafe { self.ptr.load(Ordering::Release).add(offset) }
+        unsafe { self.ptr.load(Ordering::Relaxed).add(offset) }
     }
 }
 
@@ -122,6 +126,11 @@ unsafe fn mmap_wrapper(size: usize) -> *mut u8 {
     }
 }
 
+#[cfg(windows)]
+unsafe fn mummap_wrapper(ptr: *mut u8, _size: usize) {
+    unsafe { kernal32::VirtualFree(ptr, 0, winapi::um::winnt::MEM_RELEASE) };
+}
+
 #[cfg(all(unix, not(target_os = "android")))]
 unsafe fn mmap_wrapper(size: usize) -> *mut u8 {
     unsafe {
@@ -134,6 +143,11 @@ unsafe fn mmap_wrapper(size: usize) -> *mut u8 {
             0,
         ) as *mut u8
     }
+}
+
+#[cfg(all(unix, not(target_os = "android")))]
+unsafe fn mummap_wrapper(addr: *mut u8, len: usize) {
+    unsafe { libc::munmap(addr.cast(), len) };
 }
 
 unsafe impl GlobalAlloc for BumpAlloc {
@@ -159,9 +173,40 @@ unsafe impl Allocator for BumpAlloc {
     unsafe fn deallocate(&self, _ptr: std::ptr::NonNull<u8>, _layout: Layout) {}
 }
 
+impl Drop for BumpAlloc {
+    fn drop(&mut self) {
+        reset_alloc(self);
+    }
+}
+
+fn reset_alloc(b: &BumpAlloc) {
+    b.ptr
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |mut p| {
+            if p.is_null() {
+                return None;
+            }
+            let size = b.size.load(Ordering::Relaxed);
+            unsafe {
+                mummap_wrapper(p, size);
+            }
+            p = null_mut();
+            Some(p)
+        })
+        .ok();
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::LazyLock;
+
     use super::*;
+
+    static CONCURRENT_ITER: LazyLock<usize> = LazyLock::new(|| {
+        std::env::var("BA2_CONCURRENT_ITERS")
+            .map_err(|_| ())
+            .and_then(|v| v.parse::<usize>().map_err(|_| ()))
+            .unwrap_or(1000)
+    });
 
     #[test]
     fn alloc_u32_state_methods() {
@@ -173,8 +218,79 @@ mod tests {
             ptr.write(u);
             assert_eq!(Some(&u), ptr.as_ref())
         }
-        #[cfg(feature = "allocated")]
         assert_eq!(bump.allocated(), layout.size());
         assert_eq!(bump.remaining(), 0);
+    }
+
+    fn concurrent_inner() {
+        let a = Box::new(BumpAlloc::new());
+        let a2 = Box::leak(a);
+        fn gen_thread(a2: &'static BumpAlloc) -> impl FnOnce() -> usize {
+            || {
+                let start = a2.ptr.load(Ordering::Relaxed).addr();
+                a2.allocate(Layout::for_value(&0u64)).unwrap();
+                if start == 0 {
+                    assert_ne!(a2.ptr.load(Ordering::Relaxed).addr(), start)
+                } else {
+                    assert_eq!(a2.ptr.load(Ordering::Relaxed).addr(), start)
+                }
+                start
+            }
+        }
+        let th1 = shuttle::thread::Builder::new()
+            .name("tread1".to_string())
+            .spawn(gen_thread(a2))
+            .unwrap();
+        let th2 = shuttle::thread::Builder::new()
+            .name("tread2".to_string())
+            .spawn(gen_thread(a2))
+            .unwrap();
+        let th3 = shuttle::thread::Builder::new()
+            .name("tread3".to_string())
+            .spawn(gen_thread(a2))
+            .unwrap();
+        let starts = [
+            th1.join().unwrap(),
+            th2.join().unwrap(),
+            th3.join().unwrap(),
+        ];
+        reset_alloc(a2);
+
+        assert!(
+            starts[0] == 0 || starts[1] == 0 || starts[2] == 0,
+            "expected 1 null start: {:x}, {:x}, {:x}",
+            starts[0],
+            starts[1],
+            starts[2]
+        );
+        if starts[0] == 0 {
+            assert_eq!(starts[1], starts[2]);
+        }
+        if starts[1] == 0 {
+            assert_eq!(starts[0], starts[2]);
+        }
+        if starts[2] == 0 {
+            assert_eq!(starts[0], starts[1]);
+        }
+    }
+
+    #[test]
+    fn concurrent_allocs() {
+        shuttle::check_random(concurrent_inner, *CONCURRENT_ITER);
+    }
+
+    #[test]
+    fn concurrent_allocs_dfs() {
+        shuttle::check_dfs(concurrent_inner, None);
+    }
+
+    #[test]
+    fn concurrent_allocs_pct() {
+        shuttle::check_pct(concurrent_inner, *CONCURRENT_ITER, 1000);
+    }
+
+    #[test]
+    fn concurrent_allocs_nondeterminism() {
+        shuttle::check_uncontrolled_nondeterminism(concurrent_inner, *CONCURRENT_ITER);
     }
 }
