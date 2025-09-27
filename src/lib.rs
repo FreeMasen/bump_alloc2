@@ -225,15 +225,24 @@ mod tests {
     fn concurrent_inner() {
         let a = Box::new(BumpAlloc::new());
         let a2 = Box::leak(a);
+        // generate a thread callback that will allocate 64bits and return the numeric
+        // value of the start pointer before allocation.
         fn gen_thread(a2: &'static BumpAlloc) -> impl FnOnce() -> usize {
             || {
+                // load the current pointer
                 let start = a2.ptr.load(Ordering::Relaxed).addr();
+                // perform an allocation of 64 bits
                 a2.allocate(Layout::for_value(&0u64)).unwrap();
                 if start == 0 {
+                    // if start was null, we assert that the start and the current
+                    // address are not equal
                     assert_ne!(a2.ptr.load(Ordering::Relaxed).addr(), start)
                 } else {
+                    // if start was not-null, we assert that no other thread has
+                    // clobbered the other allocation
                     assert_eq!(a2.ptr.load(Ordering::Relaxed).addr(), start)
                 }
+                // returning the start to the joiner
                 start
             }
         }
@@ -249,28 +258,26 @@ mod tests {
             .name("tread3".to_string())
             .spawn(gen_thread(a2))
             .unwrap();
-        let starts = [
+        let starts = (
             th1.join().unwrap(),
             th2.join().unwrap(),
             th3.join().unwrap(),
-        ];
-        reset_alloc(a2);
-
-        assert!(
-            starts[0] == 0 || starts[1] == 0 || starts[2] == 0,
-            "expected 1 null start: {:x}, {:x}, {:x}",
-            starts[0],
-            starts[1],
-            starts[2]
         );
-        if starts[0] == 0 {
-            assert_eq!(starts[1], starts[2]);
-        }
-        if starts[1] == 0 {
-            assert_eq!(starts[0], starts[2]);
-        }
-        if starts[2] == 0 {
-            assert_eq!(starts[0], starts[1]);
+        // ensure we unmap the pages we've allocated
+        reset_alloc(a2);
+        // at least 1 thread should have started with a null ptr
+        // and the other threads should have the same start pointer
+        match starts {
+            (0, th2, th3) => assert_eq!(th2, th3),
+            (th1, 0, th3) => assert_eq!(th1, th3),
+            (th1, th2, 0) => assert_eq!(th1, th2),
+            (th1, th2, th3) => {
+                panic!("expected one thread to start with a null pointer found\n\
+                    th1: {th1}\n\
+                    th2: {th2}\n\
+                    th3: {th3}\n\
+                ")
+            }
         }
     }
 
