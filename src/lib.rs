@@ -128,7 +128,7 @@ unsafe fn mmap_wrapper(size: usize) -> *mut u8 {
 
 #[cfg(windows)]
 unsafe fn mummap_wrapper(ptr: *mut u8, _size: usize) {
-    unsafe { kernal32::VirtualFree(ptr, 0, winapi::um::winnt::MEM_RELEASE) };
+    unsafe { kernel32::VirtualFree(ptr, 0, winapi::um::winnt::MEM_RELEASE) };
 }
 
 #[cfg(all(unix, not(target_os = "android")))]
