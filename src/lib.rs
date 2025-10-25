@@ -153,13 +153,13 @@ unsafe fn mmap_wrapper(size: usize) -> *mut u8 {
             size as WindowsSize,
             winapi::um::winnt::MEM_COMMIT | winapi::um::winnt::MEM_RESERVE,
             winapi::um::winnt::PAGE_READWRITE,
-        ) as *mut u8
+        ).cast()
     }
 }
 
 #[cfg(windows)]
 unsafe fn mummap_wrapper(ptr: *mut u8, _size: usize) {
-    unsafe { kernel32::VirtualFree(ptr, 0, winapi::um::winnt::MEM_RELEASE) };
+    unsafe { kernel32::VirtualFree(ptr.cast(), 0, winapi::um::winnt::MEM_RELEASE) };
 }
 
 #[cfg(all(unix, not(target_os = "android")))]
