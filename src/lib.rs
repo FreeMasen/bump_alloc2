@@ -2,10 +2,13 @@
 #![doc = include_str!("../README.md")]
 
 use std::{
-    alloc::{GlobalAlloc, Layout, handle_alloc_error},
+    alloc::{GlobalAlloc, handle_alloc_error},
     ptr::{NonNull, null_mut},
-    sync::atomic::{AtomicPtr, AtomicUsize, Ordering},
 };
+
+use loomish::{Layout, AtomicPtr, AtomicUsize, Ordering};
+
+mod loomish;
 
 /// For unix systems, mmap will return !1usize on failure
 #[cfg(not(windows))]
@@ -20,10 +23,18 @@ use allocator_api2::alloc::{AllocError, Allocator};
 #[cfg(feature = "nightly")]
 use std::alloc::{AllocError, Allocator};
 
+macro_rules! debug_or_loom_assert_ne {
+    ($($arg:tt)*) => {
+        if cfg!(debug_assertions) || cfg!(loom) {
+            assert_ne!($($arg)*)
+        }
+    };
+}
+
 pub struct BumpAlloc {
     ptr: AtomicPtr<u8>,
     remaining: AtomicUsize,
-    size: AtomicUsize,
+    size: usize,
 }
 
 impl Default for BumpAlloc {
@@ -36,62 +47,79 @@ unsafe impl Sync for BumpAlloc {}
 
 impl BumpAlloc {
     /// Create a new instance of the bump allocator with a default initial size of 1 gigabyte
+    #[cfg(not(loom))]
     pub const fn new() -> BumpAlloc {
         BumpAlloc::with_size(1024 * 1024 * 1024)
     }
 
     /// Create a new instance of the bump allocator with the provided size
+    #[cfg(not(loom))]
     pub const fn with_size(size: usize) -> BumpAlloc {
         BumpAlloc {
             ptr: AtomicPtr::new(null_mut()),
             remaining: AtomicUsize::new(size),
-            size: AtomicUsize::new(size),
+            size,
+        }
+    }
+
+    #[cfg(loom)]
+    pub fn new() -> BumpAlloc {
+        BumpAlloc::with_size(1024 * 1024 * 1024)
+    }
+
+    #[cfg(loom)]
+    pub fn with_size(size: usize) -> BumpAlloc {
+        BumpAlloc {
+            ptr: AtomicPtr::new(null_mut()),
+            remaining: AtomicUsize::new(size),
+            size,
         }
     }
 
     /// get the allocated
     pub fn allocated(&self) -> usize {
-        let sz = self.size.load(Ordering::Relaxed);
-        let rm = self.remaining.load(Ordering::Relaxed);
-        sz.wrapping_sub(rm)
+        let rm = self.remaining.load(Ordering::Acquire);
+        self.size.wrapping_sub(rm)
     }
 
     /// Get the number of bytes remaining
     pub fn remaining(&self) -> usize {
-        self.remaining.load(Ordering::Relaxed)
+        self.remaining.load(Ordering::Acquire)
     }
 
     fn ensure_init(&self) -> Result<(), AllocError> {
         self.ptr
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |p| {
+            .fetch_update(Ordering::Release, Ordering::Acquire, |p| {
                 if !p.is_null() {
                     return Some(p);
                 }
                 unsafe {
-                    let new_ptr = mmap_wrapper(self.remaining.load(Ordering::Relaxed));
-                    debug_assert_ne!(
+                    let new_ptr = mmap_wrapper(self.size);
+                    debug_or_loom_assert_ne!(
                         new_ptr.cast(),
                         MAP_FAILED,
                         "mmap failed: {:?}",
                         std::io::Error::last_os_error()
                     );
                     if new_ptr.cast() == MAP_FAILED {
+                        eprintln!("map failed");
                         return None;
                     }
                     Some(new_ptr)
                 }
             })
             .map_err(|_| AllocError)
-            .map(|_| ())
+            .map(|_| ())?;
+        Ok(())
     }
 
     fn bump(&self, size: usize, align: usize) -> Result<usize, AllocError> {
         let align_mask_to_round_down = !(align - 1);
         let mut allocated = 0;
         self.remaining
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |mut remaining| {
+            .fetch_update(Ordering::Release, Ordering::Acquire, |mut remaining| {
                 if size > remaining {
-                    println!("would overallocate");
+                    eprintln!("{size}/{align} would over allocate {remaining}-{}", self.size);
                     return None;
                 }
                 remaining -= size;
@@ -99,12 +127,15 @@ impl BumpAlloc {
                 allocated = remaining;
                 Some(remaining)
             })
-            .map_err(|_| AllocError)?;
+            .map_err(|_| {
+                eprintln!("bumping pointer failed!");
+                AllocError
+            })?;
         Ok(allocated)
     }
 
     fn get_ptr(&self, offset: usize) -> *mut u8 {
-        unsafe { self.ptr.load(Ordering::Relaxed).add(offset) }
+        unsafe { self.ptr.load(Ordering::Acquire).add(offset) }
     }
 }
 
@@ -185,9 +216,8 @@ fn reset_alloc(b: &BumpAlloc) {
             if p.is_null() {
                 return None;
             }
-            let size = b.size.load(Ordering::Relaxed);
             unsafe {
-                mummap_wrapper(p, size);
+                mummap_wrapper(p, b.size);
             }
             p = null_mut();
             Some(p)
@@ -197,7 +227,7 @@ fn reset_alloc(b: &BumpAlloc) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::LazyLock;
+    use std::{fmt::Debug, sync::LazyLock};
 
     use super::*;
 
@@ -227,23 +257,24 @@ mod tests {
         let a2 = Box::leak(a);
         // generate a thread callback that will allocate 64bits and return the numeric
         // value of the start pointer before allocation.
-        fn gen_thread(a2: &'static BumpAlloc) -> impl FnOnce() -> usize {
+        fn gen_thread(a2: &'static BumpAlloc) -> impl FnOnce() -> (usize, usize) {
             || {
                 // load the current pointer
-                let start = a2.ptr.load(Ordering::Relaxed).addr();
+                let start = a2.ptr.load(Ordering::Acquire).addr();
                 // perform an allocation of 64 bits
                 a2.allocate(Layout::for_value(&0u64)).unwrap();
+                let end = a2.ptr.load(Ordering::Acquire).addr();
                 if start == 0 {
                     // if start was null, we assert that the start and the current
                     // address are not equal
-                    assert_ne!(a2.ptr.load(Ordering::Relaxed).addr(), start)
+                    assert_ne!(end, start)
                 } else {
                     // if start was not-null, we assert that no other thread has
                     // clobbered the other allocation
-                    assert_eq!(a2.ptr.load(Ordering::Relaxed).addr(), start)
+                    assert_eq!(end, start)
                 }
                 // returning the start to the joiner
-                start
+                (start, end)
             }
         }
         let th1 = shuttle::thread::Builder::new()
@@ -268,14 +299,14 @@ mod tests {
         // at least 1 thread should have started with a null ptr
         // and the other threads should have the same start pointer
         match starts {
-            (0, th2, th3) => assert_eq!(th2, th3),
-            (th1, 0, th3) => assert_eq!(th1, th3),
-            (th1, th2, 0) => assert_eq!(th1, th2),
-            (th1, th2, th3) => {
+            ((0, _), (th2, _), (th3, _)) => assert_eq!(th2, th3),
+            ((th1, _), (0, _), (th3 , _)) => assert_eq!(th1, th3),
+            ((th1, _), (th2, _), (0, _)) => assert_eq!(th1, th2),
+            ((th1, e1), (th2, e2), (th3, e3)) => {
                 panic!("expected one thread to start with a null pointer found\n\
-                    th1: {th1}\n\
-                    th2: {th2}\n\
-                    th3: {th3}\n\
+                    th1: {th1}->{e1}\n\
+                    th2: {th2}->{e2}\n\
+                    th3: {th3}->{e3}\n\
                 ")
             }
         }
@@ -299,5 +330,61 @@ mod tests {
     #[test]
     fn concurrent_allocs_nondeterminism() {
         shuttle::check_uncontrolled_nondeterminism(concurrent_inner, *CONCURRENT_ITER);
+    }
+    #[derive(Debug, PartialEq, Eq)]
+    struct ThreadResult {
+        starting_address: usize,
+        ending_address: usize,
+        allocation: usize,
+    }
+
+    #[cfg(loom)]
+    #[test]
+    fn concurrent_allocs_loom() {
+        // RUSTFLAGS="--cfg loom" cargo test --lib --release -- --exact concurrent_allocs_loom
+        loom::model(concurrent_inner_loom);
+    }
+
+    #[cfg(loom)]
+    fn concurrent_inner_loom() {
+        let a = Box::new(BumpAlloc::new());
+        let a2 = Box::leak(a);
+        // generate a thread callback that will allocate 64bits and return the numeric
+        // value of the start pointer before allocation.
+        fn gen_thread(a2: &'static BumpAlloc) -> impl FnOnce() -> ThreadResult {
+            || {
+                // load the current pointer
+                let start = a2.ptr.load(Ordering::Acquire).addr();
+                // perform an allocation of 64 bits
+                let v = a2.allocate(Layout::for_value(&0u64)).unwrap();
+                let end = a2.ptr.load(Ordering::Acquire).addr();
+                // returning the state to the joiner
+                ThreadResult {
+                    starting_address: start,
+                    ending_address: end,
+                    allocation: v.addr().into(),
+                }
+            }
+        }
+        let th1 = loom::thread::Builder::new()
+            .name("tread1".to_string())
+            .spawn(gen_thread(a2))
+            .unwrap();
+        let th2 = loom::thread::Builder::new()
+            .name("tread2".to_string())
+            .spawn(gen_thread(a2))
+            .unwrap();
+        let results = (
+            th1.join().unwrap(),
+            th2.join().unwrap(),
+        );
+        // ensure we unmap the pages we've allocated
+        reset_alloc(a2);
+        println!("expected one thread to start with a null pointer found\n\
+                    th1: {:?}\n\
+                    th2: {:?}\n\
+                ", results.0, results.1);
+        assert_eq!(results.0.ending_address, results.1.ending_address);
+        assert_ne!(results.0.allocation, results.1.allocation);
     }
 }
