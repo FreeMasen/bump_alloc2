@@ -21,6 +21,9 @@ categories = [
 [dependencies]
 allocator-api2 = "0.3"
 
+[dev-dependencies]
+shuttle = "0.8"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.46"
 
@@ -28,8 +31,14 @@ libc = "0.2.46"
 winapi = { version = "0.3.6", features = ["minwindef", "winnt"] }
 kernel32-sys = "0.2.2"
 
+[target.'cfg(loom)'.dependencies]
+loom = { version = "0.7", features = ["checkpoint"] }
+
 [features]
 default = [ "std" ]
 alloc = [ "allocator-api2/alloc" ]
 std = [ "alloc", "allocator-api2/std" ]
 nightly = []
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
