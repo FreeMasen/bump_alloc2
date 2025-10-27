@@ -6,7 +6,7 @@ use std::{
     ptr::{NonNull, null_mut},
 };
 
-use loomish::{Layout, AtomicPtr, AtomicUsize, Ordering};
+use loomish::{AtomicPtr, AtomicUsize, Layout, Ordering};
 
 mod loomish;
 
@@ -119,7 +119,10 @@ impl BumpAlloc {
         self.remaining
             .fetch_update(Ordering::Release, Ordering::Acquire, |mut remaining| {
                 if size > remaining {
-                    eprintln!("{size}/{align} would over allocate {remaining}-{}", self.size);
+                    eprintln!(
+                        "{size}/{align} would over allocate {remaining}-{}",
+                        self.size
+                    );
                     return None;
                 }
                 remaining -= size;
@@ -153,7 +156,8 @@ unsafe fn mmap_wrapper(size: usize) -> *mut u8 {
             size as WindowsSize,
             winapi::um::winnt::MEM_COMMIT | winapi::um::winnt::MEM_RESERVE,
             winapi::um::winnt::PAGE_READWRITE,
-        ).cast()
+        )
+        .cast()
     }
 }
 
@@ -231,6 +235,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(not(loom))]
     static CONCURRENT_ITER: LazyLock<usize> = LazyLock::new(|| {
         std::env::var("BA2_CONCURRENT_ITERS")
             .map_err(|_| ())
@@ -238,6 +243,7 @@ mod tests {
             .unwrap_or(1000)
     });
 
+    #[cfg(not(loom))]
     #[test]
     fn alloc_u32_state_methods() {
         let u = u32::MAX;
@@ -253,104 +259,16 @@ mod tests {
     }
 
     fn concurrent_inner() {
-        let a = Box::new(BumpAlloc::new());
+        #[cfg(loom)]
+        use loom::thread::Builder as ThreadBuilder;
+        #[cfg(not(loom))]
+        use shuttle::thread::Builder as ThreadBuilder;
+
+        let a = Box::new(BumpAlloc::with_size(1024));
         let a2 = Box::leak(a);
         // generate a thread callback that will allocate 64bits and return the numeric
-        // value of the start pointer before allocation.
-        fn gen_thread(a2: &'static BumpAlloc) -> impl FnOnce() -> (usize, usize) {
-            || {
-                // load the current pointer
-                let start = a2.ptr.load(Ordering::Acquire).addr();
-                // perform an allocation of 64 bits
-                a2.allocate(Layout::for_value(&0u64)).unwrap();
-                let end = a2.ptr.load(Ordering::Acquire).addr();
-                if start == 0 {
-                    // if start was null, we assert that the start and the current
-                    // address are not equal
-                    assert_ne!(end, start)
-                } else {
-                    // if start was not-null, we assert that no other thread has
-                    // clobbered the other allocation
-                    assert_eq!(end, start)
-                }
-                // returning the start to the joiner
-                (start, end)
-            }
-        }
-        let th1 = shuttle::thread::Builder::new()
-            .name("tread1".to_string())
-            .spawn(gen_thread(a2))
-            .unwrap();
-        let th2 = shuttle::thread::Builder::new()
-            .name("tread2".to_string())
-            .spawn(gen_thread(a2))
-            .unwrap();
-        let th3 = shuttle::thread::Builder::new()
-            .name("tread3".to_string())
-            .spawn(gen_thread(a2))
-            .unwrap();
-        let starts = (
-            th1.join().unwrap(),
-            th2.join().unwrap(),
-            th3.join().unwrap(),
-        );
-        // ensure we unmap the pages we've allocated
-        reset_alloc(a2);
-        // at least 1 thread should have started with a null ptr
-        // and the other threads should have the same start pointer
-        match starts {
-            ((0, _), (th2, _), (th3, _)) => assert_eq!(th2, th3),
-            ((th1, _), (0, _), (th3 , _)) => assert_eq!(th1, th3),
-            ((th1, _), (th2, _), (0, _)) => assert_eq!(th1, th2),
-            ((th1, e1), (th2, e2), (th3, e3)) => {
-                panic!("expected one thread to start with a null pointer found\n\
-                    th1: {th1}->{e1}\n\
-                    th2: {th2}->{e2}\n\
-                    th3: {th3}->{e3}\n\
-                ")
-            }
-        }
-    }
-
-    #[test]
-    fn concurrent_allocs() {
-        shuttle::check_random(concurrent_inner, *CONCURRENT_ITER);
-    }
-
-    #[test]
-    fn concurrent_allocs_dfs() {
-        shuttle::check_dfs(concurrent_inner, None);
-    }
-
-    #[test]
-    fn concurrent_allocs_pct() {
-        shuttle::check_pct(concurrent_inner, *CONCURRENT_ITER, 1000);
-    }
-
-    #[test]
-    fn concurrent_allocs_nondeterminism() {
-        shuttle::check_uncontrolled_nondeterminism(concurrent_inner, *CONCURRENT_ITER);
-    }
-    #[derive(Debug, PartialEq, Eq)]
-    struct ThreadResult {
-        starting_address: usize,
-        ending_address: usize,
-        allocation: usize,
-    }
-
-    #[cfg(loom)]
-    #[test]
-    fn concurrent_allocs_loom() {
-        // RUSTFLAGS="--cfg loom" cargo test --lib --release -- --exact concurrent_allocs_loom
-        loom::model(concurrent_inner_loom);
-    }
-
-    #[cfg(loom)]
-    fn concurrent_inner_loom() {
-        let a = Box::new(BumpAlloc::new());
-        let a2 = Box::leak(a);
-        // generate a thread callback that will allocate 64bits and return the numeric
-        // value of the start pointer before allocation.
+        // value of the start pointer before allocation, the pointer of the allocated
+        // u64 and the start pointer after the allocation.
         fn gen_thread(a2: &'static BumpAlloc) -> impl FnOnce() -> ThreadResult {
             || {
                 // load the current pointer
@@ -366,25 +284,63 @@ mod tests {
                 }
             }
         }
-        let th1 = loom::thread::Builder::new()
+        let th1 = ThreadBuilder::new()
             .name("tread1".to_string())
             .spawn(gen_thread(a2))
             .unwrap();
-        let th2 = loom::thread::Builder::new()
+        let th2 = ThreadBuilder::new()
             .name("tread2".to_string())
             .spawn(gen_thread(a2))
             .unwrap();
-        let results = (
-            th1.join().unwrap(),
-            th2.join().unwrap(),
-        );
+        let results = (th1.join().unwrap(), th2.join().unwrap());
         // ensure we unmap the pages we've allocated
         reset_alloc(a2);
-        println!("expected one thread to start with a null pointer found\n\
+        println!(
+            "expected one thread to start with a null pointer found\n\
                     th1: {:?}\n\
                     th2: {:?}\n\
-                ", results.0, results.1);
+                ",
+            results.0, results.1
+        );
         assert_eq!(results.0.ending_address, results.1.ending_address);
         assert_ne!(results.0.allocation, results.1.allocation);
+    }
+
+    #[cfg(not(loom))]
+    #[test]
+    fn concurrent_allocs() {
+        shuttle::check_random(concurrent_inner, *CONCURRENT_ITER);
+    }
+
+    #[cfg(not(loom))]
+    #[test]
+    fn concurrent_allocs_dfs() {
+        shuttle::check_dfs(concurrent_inner, None);
+    }
+
+    #[cfg(not(loom))]
+    #[test]
+    fn concurrent_allocs_pct() {
+        shuttle::check_pct(concurrent_inner, *CONCURRENT_ITER, 1000);
+    }
+
+    #[cfg(not(loom))]
+    #[test]
+    fn concurrent_allocs_nondeterminism() {
+        shuttle::check_uncontrolled_nondeterminism(concurrent_inner, *CONCURRENT_ITER);
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct ThreadResult {
+        starting_address: usize,
+        ending_address: usize,
+        allocation: usize,
+    }
+
+    #[cfg(loom)]
+    #[test]
+    fn concurrent_allocs_loom() {
+        // RUSTFLAGS="--cfg loom" cargo test --lib --release -- --exact concurrent_allocs_loom
+        loom::model(concurrent_inner);
     }
 }

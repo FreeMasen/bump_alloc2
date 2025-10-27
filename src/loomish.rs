@@ -1,5 +1,3 @@
-
-
 pub use inner::*;
 
 #[cfg(loom)]
