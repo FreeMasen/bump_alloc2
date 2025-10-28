@@ -270,7 +270,7 @@ mod tests {
         #[cfg(not(loom))]
         use shuttle::thread::Builder as ThreadBuilder;
 
-        let a = Box::new(BumpAlloc::with_size(1024));
+        let a = Box::new(BumpAlloc::with_size(4096));
         let a2 = Box::leak(a);
         // generate a thread callback that will allocate 64bits and return the numeric
         // value of the start pointer before allocation, the pointer of the allocated
