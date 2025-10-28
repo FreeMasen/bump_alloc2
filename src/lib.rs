@@ -162,14 +162,18 @@ unsafe fn mmap_wrapper(size: usize) -> *mut u8 {
 }
 
 #[cfg(windows)]
-unsafe fn mummap_wrapper(ptr: *mut u8, _size: usize) {
-    unsafe {
+unsafe fn mummap_wrapper(ptr: *mut u8, _size: usize) -> Option<()> {
+    let status = unsafe {
         kernel32::VirtualFree(
             ptr.cast(),
             0,
             winapi::um::winnt::MEM_RELEASE | winapi::um::winnt::MEM_DECOMMIT,
         )
     };
+    if status == 0 {
+        return None;
+    }
+    Some(())
 }
 
 #[cfg(all(unix, not(target_os = "android")))]
@@ -187,8 +191,12 @@ unsafe fn mmap_wrapper(size: usize) -> *mut u8 {
 }
 
 #[cfg(all(unix, not(target_os = "android")))]
-unsafe fn mummap_wrapper(addr: *mut u8, len: usize) {
-    unsafe { libc::munmap(addr.cast(), len) };
+unsafe fn mummap_wrapper(addr: *mut u8, len: usize) -> Option<()> {
+    let status =  unsafe { libc::munmap(addr.cast(), len) };
+    if status != 0 {
+        return None;
+    }
+    Some(())
 }
 
 unsafe impl GlobalAlloc for BumpAlloc {
@@ -226,8 +234,10 @@ fn reset_alloc(b: &BumpAlloc) {
             if p.is_null() {
                 return None;
             }
-            unsafe {
-                mummap_wrapper(p, b.size);
+            if unsafe {
+                mummap_wrapper(p, b.size)
+            }.is_none() {
+                debug_assert!(false, "unmap failed {0}/{0:?}", std::io::Error::last_os_error());
             }
             p = null_mut();
             Some(p)
