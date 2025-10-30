@@ -243,12 +243,11 @@ fn reset_alloc(b: &BumpAlloc) {
 
 #[cfg(test)]
 mod tests {
-    use std::{fmt::Debug, sync::LazyLock};
-
     use super::*;
+    use std::fmt::Debug;
 
     #[cfg(not(loom))]
-    static CONCURRENT_ITER: LazyLock<usize> = LazyLock::new(|| {
+    static CONCURRENT_ITER: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
         std::env::var("BA2_CONCURRENT_ITERS")
             .map_err(|_| ())
             .and_then(|v| v.parse::<usize>().map_err(|_| ()))
