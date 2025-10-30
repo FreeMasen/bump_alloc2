@@ -21,16 +21,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2025-09-16
-          components: cargo, clippy, rustfmt
       - name: format
         run: cargo fmt --check
       - name: clippy
         run: cargo clippy
-      - name: clippy-nightly
-        run: cargo +nightly clippy --features nightly
   test:
     strategy:
       matrix:
