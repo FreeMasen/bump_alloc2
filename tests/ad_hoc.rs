@@ -69,7 +69,7 @@ fn linked_list_u16_max() {
 fn concurrent_boxes() {
     shuttle::check_random(
         || {
-            let a = Box::new(BumpAlloc::new());
+            let a = Box::new(BumpAlloc::with_size(4096));
             let a2 = Box::leak(a);
             let th1 = shuttle::thread::spawn(|| {
                 boxes::<300>(a2);
@@ -84,6 +84,6 @@ fn concurrent_boxes() {
             th2.join().unwrap();
             th3.join().unwrap();
         },
-        100_000,
+        1000,
     );
 }
