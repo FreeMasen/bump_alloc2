@@ -10,7 +10,7 @@ mod shared;
 
 #[test]
 fn vec100() {
-    let alloc = BumpAlloc::default();
+    let alloc = BumpAlloc::with_size(1024 * 1024);
     let mut v = Vec::new_in(alloc);
     v.extend((0..100u8).map(Something::from));
     check_iter(v.into_iter());
@@ -18,7 +18,7 @@ fn vec100() {
 
 #[test]
 fn vec_u16_max() {
-    let alloc = BumpAlloc::default();
+    let alloc = BumpAlloc::with_size(1024 * 1024);
     let mut v = Vec::new_in(alloc);
     v.extend((0..65535u16).map(Something::from));
     check_iter(v.into_iter());
@@ -26,13 +26,13 @@ fn vec_u16_max() {
 
 #[test]
 fn boxes100() {
-    let alloc = BumpAlloc::default();
+    let alloc = BumpAlloc::with_size(1024 * 1024);
     boxes::<100>(&alloc);
 }
 
 #[test]
 fn boxes_u16_max() {
-    let alloc = BumpAlloc::default();
+    let alloc = BumpAlloc::with_size(1024 * 1024);
     boxes::<65535>(&alloc);
 }
 
@@ -48,7 +48,7 @@ pub fn boxes<const N: usize>(alloc: &BumpAlloc) {
 #[cfg(feature = "nightly")]
 #[test]
 fn linked_list100() {
-    let alloc = BumpAlloc::new();
+    let alloc = BumpAlloc::with_size(1024 * 1024);
     let mut linked_list = std::collections::LinkedList::new_in(alloc);
     for i in 0..100u8 {
         linked_list.push_back(Something::from(i))
@@ -58,7 +58,7 @@ fn linked_list100() {
 #[cfg(feature = "nightly")]
 #[test]
 fn linked_list_u16_max() {
-    let alloc = BumpAlloc::new();
+    let alloc = BumpAlloc::with_size(1024 * 1024);
     let mut linked_list = std::collections::LinkedList::new_in(alloc);
     for i in 0..=u16::MAX {
         linked_list.push_back(Something::from(i))
@@ -69,7 +69,7 @@ fn linked_list_u16_max() {
 fn concurrent_boxes() {
     shuttle::check_random(
         || {
-            let a = Box::new(BumpAlloc::with_size(4096));
+            let a = Box::new(BumpAlloc::with_size(1024 * 1024));
             let a2 = Box::leak(a);
             let th1 = shuttle::thread::spawn(|| {
                 boxes::<300>(a2);
