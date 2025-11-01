@@ -222,9 +222,7 @@ unsafe impl Allocator for BumpAlloc {
 
 impl Drop for BumpAlloc {
     fn drop(&mut self) {
-        std::sync::Once::new().call_once(move || {
-            reset_alloc(self);
-        });
+        reset_alloc(self);
     }
 }
 
