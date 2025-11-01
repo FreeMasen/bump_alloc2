@@ -186,6 +186,10 @@ unsafe fn mmap_wrapper(size: usize) -> *mut u8 {
 
 #[cfg(all(unix, not(target_os = "android")))]
 unsafe fn mummap_wrapper(addr: *mut u8, len: usize) -> Option<()> {
+    eprintln!("mummap: {}: {len}", addr.addr());
+    if addr.is_null() {
+        return Some(());
+    }
     let status = unsafe { libc::munmap(addr.cast(), len) };
     if status != 0 {
         return None;
@@ -218,31 +222,31 @@ unsafe impl Allocator for BumpAlloc {
 
 impl Drop for BumpAlloc {
     fn drop(&mut self) {
-        reset_alloc(self);
+        std::sync::Once::new().call_once(move || {
+            reset_alloc(self);
+        });
     }
 }
 
 fn reset_alloc(b: &BumpAlloc) {
-    b.ptr
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |mut p| {
-            if p.is_null() {
-                return None;
-            }
-            if unsafe { mummap_wrapper(p, b.size) }.is_none() {
-                debug_assert!(
-                    false,
-                    "unmap failed {0}/{0:?}",
-                    std::io::Error::last_os_error()
-                );
-            }
-            p = null_mut();
-            Some(p)
-        })
-        .ok();
+    let old_ptr = b.ptr.swap(null_mut(), Ordering::AcqRel);
+    if old_ptr.is_null() {
+        return;
+    }
+    if unsafe { mummap_wrapper(old_ptr, b.size) }.is_none() {
+        debug_assert!(
+            false,
+            "unmap failed {0}/{0:?}",
+            std::io::Error::last_os_error()
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    // TODO: line up the ThreadResult and debug defs with miri
+    // tests
+    #[allow(unused)]
     use super::*;
     use std::fmt::Debug;
 
@@ -317,25 +321,25 @@ mod tests {
         assert_ne!(results.0.allocation, results.1.allocation);
     }
 
-    #[cfg(not(loom))]
+    #[cfg(not(any(loom, miri)))]
     #[test]
     fn concurrent_allocs() {
         shuttle::check_random(concurrent_inner, *CONCURRENT_ITER);
     }
 
-    #[cfg(not(loom))]
+    #[cfg(not(any(loom, miri)))]
     #[test]
     fn concurrent_allocs_dfs() {
         shuttle::check_dfs(concurrent_inner, None);
     }
 
-    #[cfg(not(loom))]
+    #[cfg(not(any(loom, miri)))]
     #[test]
     fn concurrent_allocs_pct() {
         shuttle::check_pct(concurrent_inner, *CONCURRENT_ITER, 1000);
     }
 
-    #[cfg(not(loom))]
+    #[cfg(not(any(loom, miri)))]
     #[test]
     fn concurrent_allocs_nondeterminism() {
         shuttle::check_uncontrolled_nondeterminism(concurrent_inner, *CONCURRENT_ITER);

@@ -24,3 +24,15 @@ fn box100_works() {
 fn linked_list_100() {
     shared::linked_list::<100>();
 }
+
+#[cfg(not(miri))]
+#[test]
+fn vec_u16_max_works() {
+    shared::vec_u16_max();
+}
+
+#[cfg(not(miri))]
+#[test]
+fn boxes_u16_max_works() {
+    shared::box_u16_max();
+}

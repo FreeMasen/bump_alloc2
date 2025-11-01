@@ -16,6 +16,7 @@ fn vec100() {
     check_iter(v.into_iter());
 }
 
+#[cfg(not(miri))]
 #[test]
 fn vec_u16_max() {
     let alloc = BumpAlloc::with_size(1024 * 1024 * 4);
@@ -30,6 +31,7 @@ fn boxes100() {
     boxes::<100>(&alloc);
 }
 
+#[cfg(not(miri))]
 #[test]
 fn boxes_u16_max() {
     let alloc = BumpAlloc::with_size(1024 * 1024 * 4);
@@ -55,7 +57,8 @@ fn linked_list100() {
     }
 }
 
-#[cfg(feature = "nightly")]
+
+#[cfg(all(feature = "nightly", not(miri)))]
 #[test]
 fn linked_list_u16_max() {
     let alloc = BumpAlloc::with_size(1024 * 1024 * 4);
@@ -65,6 +68,7 @@ fn linked_list_u16_max() {
     }
 }
 
+#[cfg(not(miri))]
 #[test]
 fn concurrent_boxes() {
     shuttle::check_random(
