@@ -57,7 +57,6 @@ fn linked_list100() {
     }
 }
 
-
 #[cfg(all(feature = "nightly", not(miri)))]
 #[test]
 fn linked_list_u16_max() {

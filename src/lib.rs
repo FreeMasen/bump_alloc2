@@ -242,11 +242,7 @@ fn reset_alloc(b: &BumpAlloc) {
 
 #[cfg(test)]
 mod tests {
-    // TODO: line up the ThreadResult and debug defs with miri
-    // tests
-    #[allow(unused)]
     use super::*;
-    use std::fmt::Debug;
 
     #[cfg(not(loom))]
     static CONCURRENT_ITER: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
@@ -271,6 +267,7 @@ mod tests {
         assert_eq!(bump.remaining(), 0);
     }
 
+    #[cfg(not(miri))]
     fn concurrent_inner() {
         #[cfg(loom)]
         use loom::thread::Builder as ThreadBuilder;
@@ -343,6 +340,7 @@ mod tests {
         shuttle::check_uncontrolled_nondeterminism(concurrent_inner, *CONCURRENT_ITER);
     }
 
+    #[cfg(any(loom, not(miri)))]
     #[derive(Debug, PartialEq, Eq)]
     struct ThreadResult {
         starting_address: usize,
