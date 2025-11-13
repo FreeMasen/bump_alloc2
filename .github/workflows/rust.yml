@@ -10,6 +10,21 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  check:
+    strategy:
+      matrix:
+        os:
+          - windows-latest
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: format
+        run: cargo fmt --check
+      - name: clippy
+        run: cargo clippy
   test:
     strategy:
       matrix:
@@ -25,6 +40,10 @@ jobs:
       run: cargo build --verbose
     - name: Run tests
       run: cargo test --verbose
+    - name: Run loom test
+      run: cargo test --lib -- tests::concurrent_allocs_loom
+      env:
+        RUSTFLAGS: "--cfg loom"
   test-nightly:
     strategy:
       matrix:
@@ -43,3 +62,31 @@ jobs:
       run: cargo +nightly build --features nightly --verbose
     - name: Run tests
       run: cargo +nightly test --features nightly --verbose
+  test-miri:
+    strategy:
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v5
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: nightly-2025-09-16
+        components: miri
+    - name: test
+      run: > 
+        echo "setting up override" &&
+        rustup override set nightly-2025-09-16 &&
+        echo "setting up miri" &&
+        cargo miri setup &&
+        echo "running lib test" &&
+        cargo miri test --lib &&
+        echo "running ad_hoc tests" &&
+        cargo miri test --test ad_hoc --features nightly &&
+        echo "running new tests" &&
+        cargo miri test --test new --features nightly &&
+        echo "running with_size tests" &&
+        cargo miri test --test with_size --features nightly

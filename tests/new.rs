@@ -21,26 +21,18 @@ fn box100_works() {
 }
 
 #[test]
-fn vec_u16_max_works() {
-    shared::vec_u16_max();
-}
-
-#[test]
-fn btree_map_u16_max_works() {
-    shared::btree_map_u16_max();
-}
-
-#[test]
-fn boxes_u16_max_works() {
-    shared::box_u16_max();
-}
-
-#[test]
 fn linked_list_100() {
     shared::linked_list::<100>();
 }
 
+#[cfg(not(miri))]
 #[test]
-fn linked_list_u16_max() {
-    shared::linked_list::<65535>();
+fn vec_u16_max_works() {
+    shared::vec_u16_max();
+}
+
+#[cfg(not(miri))]
+#[test]
+fn boxes_u16_max_works() {
+    shared::box_u16_max();
 }

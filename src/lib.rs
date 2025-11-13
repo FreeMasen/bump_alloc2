@@ -1,9 +1,14 @@
 #![cfg_attr(feature = "nightly", feature(allocator_api))]
+#![doc = include_str!("../README.md")]
 
-use std::alloc::{GlobalAlloc, Layout, handle_alloc_error};
-use std::cell::UnsafeCell;
-use std::ptr::{NonNull, null_mut};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::{
+    alloc::{GlobalAlloc, handle_alloc_error},
+    ptr::{NonNull, null_mut},
+};
+
+use loomish::{AtomicPtr, AtomicUsize, Layout, Ordering};
+
+mod loomish;
 
 /// For unix systems, mmap will return !1usize on failure
 #[cfg(not(windows))]
@@ -18,18 +23,17 @@ use allocator_api2::alloc::{AllocError, Allocator};
 #[cfg(feature = "nightly")]
 use std::alloc::{AllocError, Allocator};
 
-fn align_to(size: usize, align: usize) -> usize {
-    (size + align - 1) & !(align - 1)
-}
-
-struct Inner {
-    offset: AtomicUsize,
-    mmap: *mut u8,
-    initializing: AtomicBool,
+macro_rules! debug_or_loom_assert_ne {
+    ($($arg:tt)*) => {
+        if cfg!(debug_assertions) || cfg!(loom) {
+            assert_ne!($($arg)*)
+        }
+    };
 }
 
 pub struct BumpAlloc {
-    inner: UnsafeCell<Inner>,
+    ptr: AtomicPtr<u8>,
+    remaining: AtomicUsize,
     size: usize,
 }
 
@@ -43,20 +47,98 @@ unsafe impl Sync for BumpAlloc {}
 
 impl BumpAlloc {
     /// Create a new instance of the bump allocator with a default initial size of 1 gigabyte
+    #[cfg(not(loom))]
     pub const fn new() -> BumpAlloc {
         BumpAlloc::with_size(1024 * 1024 * 1024)
     }
 
     /// Create a new instance of the bump allocator with the provided size
+    #[cfg(not(loom))]
     pub const fn with_size(size: usize) -> BumpAlloc {
         BumpAlloc {
-            inner: UnsafeCell::new(Inner {
-                initializing: AtomicBool::new(true),
-                mmap: null_mut(),
-                offset: AtomicUsize::new(0),
-            }),
+            ptr: AtomicPtr::new(null_mut()),
+            remaining: AtomicUsize::new(size),
             size,
         }
+    }
+
+    #[cfg(loom)]
+    pub fn new() -> BumpAlloc {
+        BumpAlloc::with_size(1024 * 1024 * 1024)
+    }
+
+    #[cfg(loom)]
+    pub fn with_size(size: usize) -> BumpAlloc {
+        BumpAlloc {
+            ptr: AtomicPtr::new(null_mut()),
+            remaining: AtomicUsize::new(size),
+            size,
+        }
+    }
+
+    /// get the allocated
+    pub fn allocated(&self) -> usize {
+        let rm = self.remaining.load(Ordering::Acquire);
+        self.size.wrapping_sub(rm)
+    }
+
+    /// Get the number of bytes remaining
+    pub fn remaining(&self) -> usize {
+        self.remaining.load(Ordering::Acquire)
+    }
+
+    fn ensure_init(&self) -> Result<(), AllocError> {
+        self.ptr
+            .fetch_update(Ordering::Release, Ordering::Acquire, |p| {
+                if !p.is_null() {
+                    return Some(p);
+                }
+                unsafe {
+                    let new_ptr = mmap_wrapper(self.size);
+                    debug_or_loom_assert_ne!(
+                        new_ptr.cast(),
+                        MAP_FAILED,
+                        "mmap failed: {:?}",
+                        std::io::Error::last_os_error()
+                    );
+                    if new_ptr.cast() == MAP_FAILED {
+                        eprintln!("map failed");
+                        return None;
+                    }
+                    Some(new_ptr)
+                }
+            })
+            .map_err(|_| AllocError)
+            .map(|_| ())?;
+        Ok(())
+    }
+
+    fn bump(&self, size: usize, align: usize) -> Result<usize, AllocError> {
+        let align_mask_to_round_down = !(align - 1);
+        let mut allocated = 0;
+        self.remaining
+            .fetch_update(Ordering::Release, Ordering::Acquire, |mut remaining| {
+                if size > remaining {
+                    eprintln!(
+                        "{size}/{align} would over allocate {remaining}-{}",
+                        self.size
+                    );
+                    return None;
+                }
+                remaining -= size;
+                remaining &= align_mask_to_round_down;
+                allocated = remaining;
+                Some(remaining)
+            })
+            .map_err(|_| {
+                eprintln!("bumping pointer failed!");
+                AllocError
+            })?;
+        Ok(allocated)
+    }
+
+    fn get_ptr(&self, offset: usize) -> *mut u8 {
+        unsafe { self.ptr.load(Ordering::Acquire).add(offset) }
     }
 }
 
@@ -74,8 +156,18 @@ unsafe fn mmap_wrapper(size: usize) -> *mut u8 {
             size as WindowsSize,
             winapi::um::winnt::MEM_COMMIT | winapi::um::winnt::MEM_RESERVE,
             winapi::um::winnt::PAGE_READWRITE,
-        ) as *mut u8
+        )
+        .cast()
     }
+}
+
+#[cfg(windows)]
+unsafe fn mummap_wrapper(ptr: *mut u8, _size: usize) -> Option<()> {
+    let status = unsafe { kernel32::VirtualFree(ptr.cast(), 0, winapi::um::winnt::MEM_RELEASE) };
+    if status == 0 {
+        return None;
+    }
+    Some(())
 }
 
 #[cfg(all(unix, not(target_os = "android")))]
@@ -92,6 +184,19 @@ unsafe fn mmap_wrapper(size: usize) -> *mut u8 {
     }
 }
 
+#[cfg(all(unix, not(target_os = "android")))]
+unsafe fn mummap_wrapper(addr: *mut u8, len: usize) -> Option<()> {
+    eprintln!("mummap: {}: {len}", addr.addr());
+    if addr.is_null() {
+        return Some(());
+    }
+    let status = unsafe { libc::munmap(addr.cast(), len) };
+    if status != 0 {
+        return None;
+    }
+    Some(())
+}
+
 unsafe impl GlobalAlloc for BumpAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let Ok(ptr) = Allocator::allocate(&self, layout).map(|v| v.as_ptr().cast()) else {
@@ -105,36 +210,148 @@ unsafe impl GlobalAlloc for BumpAlloc {
 
 unsafe impl Allocator for BumpAlloc {
     fn allocate(&self, layout: Layout) -> Result<std::ptr::NonNull<[u8]>, AllocError> {
-        unsafe {
-            let inner = &mut *self.inner.get();
-
-            // If initializing is true it means we need to do the original mmap.
-            if inner.initializing.swap(false, Ordering::Relaxed) {
-                inner.mmap = mmap_wrapper(self.size);
-
-                if inner.mmap.cast() == MAP_FAILED {
-                    return Err(AllocError);
-                }
-            } else {
-                // Spin loop waiting on the mmap to be ready.
-                while 0 == inner.offset.load(Ordering::Relaxed) {}
-            }
-
-            let bytes_required = align_to(layout.size() + layout.align(), layout.align());
-
-            let my_offset = inner.offset.fetch_add(bytes_required, Ordering::Relaxed);
-
-            let aligned_offset = align_to(my_offset, layout.align());
-
-            if (aligned_offset + layout.size()) > self.size {
-                return Err(AllocError)
-            }
-
-            let ret_ptr = inner.mmap.add(aligned_offset);
-            let nn = NonNull::new(ret_ptr).ok_or(AllocError)?;
-            Ok(NonNull::slice_from_raw_parts(nn, layout.size()))
-        }
+        self.ensure_init()?;
+        let allocated = self.bump(layout.size(), layout.align())?;
+        let ret_ptr = self.get_ptr(allocated);
+        let nn = NonNull::new(ret_ptr).ok_or(AllocError)?;
+        Ok(NonNull::slice_from_raw_parts(nn, layout.size()))
     }
 
     unsafe fn deallocate(&self, _ptr: std::ptr::NonNull<u8>, _layout: Layout) {}
+}
+
+impl Drop for BumpAlloc {
+    fn drop(&mut self) {
+        reset_alloc(self);
+    }
+}
+
+fn reset_alloc(b: &BumpAlloc) {
+    let old_ptr = b.ptr.swap(null_mut(), Ordering::AcqRel);
+    if old_ptr.is_null() {
+        return;
+    }
+    if unsafe { mummap_wrapper(old_ptr, b.size) }.is_none() {
+        debug_assert!(
+            false,
+            "unmap failed {0}/{0:?}",
+            std::io::Error::last_os_error()
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(all(not(loom), not(miri)))]
+    static CONCURRENT_ITER: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
+        std::env::var("BA2_CONCURRENT_ITERS")
+            .map_err(|_| ())
+            .and_then(|v| v.parse::<usize>().map_err(|_| ()))
+            .unwrap_or(1000)
+    });
+
+    #[cfg(not(loom))]
+    #[test]
+    fn alloc_u32_state_methods() {
+        let u = u32::MAX;
+        let layout = Layout::for_value(&u);
+        let bump = BumpAlloc::with_size(layout.size());
+        unsafe {
+            let ptr = bump.alloc(layout).cast::<u32>();
+            ptr.write(u);
+            assert_eq!(Some(&u), ptr.as_ref())
+        }
+        assert_eq!(bump.allocated(), layout.size());
+        assert_eq!(bump.remaining(), 0);
+    }
+
+    #[cfg(not(miri))]
+    fn concurrent_inner() {
+        #[cfg(loom)]
+        use loom::thread::Builder as ThreadBuilder;
+        #[cfg(not(loom))]
+        use shuttle::thread::Builder as ThreadBuilder;
+
+        let a = Box::new(BumpAlloc::with_size(4096));
+        let a2 = Box::leak(a);
+        // generate a thread callback that will allocate 64bits and return the numeric
+        // value of the start pointer before allocation, the pointer of the allocated
+        // u64 and the start pointer after the allocation.
+        fn gen_thread(a2: &'static BumpAlloc) -> impl FnOnce() -> ThreadResult {
+            || {
+                // load the current pointer
+                let start = a2.ptr.load(Ordering::Acquire).addr();
+                // perform an allocation of 64 bits
+                let v = a2.allocate(Layout::for_value(&0u64)).unwrap();
+                let end = a2.ptr.load(Ordering::Acquire).addr();
+                // returning the state to the joiner
+                ThreadResult {
+                    starting_address: start,
+                    ending_address: end,
+                    allocation: v.addr().into(),
+                }
+            }
+        }
+        let th1 = ThreadBuilder::new()
+            .name("tread1".to_string())
+            .spawn(gen_thread(a2))
+            .unwrap();
+        let th2 = ThreadBuilder::new()
+            .name("tread2".to_string())
+            .spawn(gen_thread(a2))
+            .unwrap();
+        let results = (th1.join().unwrap(), th2.join().unwrap());
+        // ensure we unmap the pages we've allocated
+        reset_alloc(a2);
+        println!(
+            "expected one thread to start with a null pointer found\n\
+                    th1: {:?}\n\
+                    th2: {:?}\n\
+                ",
+            results.0, results.1
+        );
+        assert_eq!(results.0.ending_address, results.1.ending_address);
+        assert_ne!(results.0.allocation, results.1.allocation);
+    }
+
+    #[cfg(not(any(loom, miri)))]
+    #[test]
+    fn concurrent_allocs() {
+        shuttle::check_random(concurrent_inner, *CONCURRENT_ITER);
+    }
+
+    #[cfg(not(any(loom, miri)))]
+    #[test]
+    fn concurrent_allocs_dfs() {
+        shuttle::check_dfs(concurrent_inner, None);
+    }
+
+    #[cfg(not(any(loom, miri)))]
+    #[test]
+    fn concurrent_allocs_pct() {
+        shuttle::check_pct(concurrent_inner, *CONCURRENT_ITER, 1000);
+    }
+
+    #[cfg(not(any(loom, miri)))]
+    #[test]
+    fn concurrent_allocs_nondeterminism() {
+        shuttle::check_uncontrolled_nondeterminism(concurrent_inner, *CONCURRENT_ITER);
+    }
+
+    #[cfg(any(loom, not(miri)))]
+    #[derive(Debug, PartialEq, Eq)]
+    struct ThreadResult {
+        starting_address: usize,
+        ending_address: usize,
+        allocation: usize,
+    }
+
+    #[cfg(loom)]
+    #[test]
+    fn concurrent_allocs_loom() {
+        // RUSTFLAGS="--cfg loom" cargo test --lib --release -- --exact concurrent_allocs_loom
+        loom::model(concurrent_inner);
+    }
 }

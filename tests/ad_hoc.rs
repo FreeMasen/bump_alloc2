@@ -10,15 +10,16 @@ mod shared;
 
 #[test]
 fn vec100() {
-    let alloc = BumpAlloc::default();
+    let alloc = BumpAlloc::with_size(1024 * 1024 * 4);
     let mut v = Vec::new_in(alloc);
     v.extend((0..100u8).map(Something::from));
     check_iter(v.into_iter());
 }
 
+#[cfg(not(miri))]
 #[test]
 fn vec_u16_max() {
-    let alloc = BumpAlloc::default();
+    let alloc = BumpAlloc::with_size(1024 * 1024 * 4);
     let mut v = Vec::new_in(alloc);
     v.extend((0..65535u16).map(Something::from));
     check_iter(v.into_iter());
@@ -26,13 +27,14 @@ fn vec_u16_max() {
 
 #[test]
 fn boxes100() {
-    let alloc = BumpAlloc::default();
+    let alloc = BumpAlloc::with_size(1024 * 1024 * 4);
     boxes::<100>(&alloc);
 }
 
+#[cfg(not(miri))]
 #[test]
 fn boxes_u16_max() {
-    let alloc = BumpAlloc::default();
+    let alloc = BumpAlloc::with_size(1024 * 1024 * 4);
     boxes::<65535>(&alloc);
 }
 
@@ -48,19 +50,43 @@ pub fn boxes<const N: usize>(alloc: &BumpAlloc) {
 #[cfg(feature = "nightly")]
 #[test]
 fn linked_list100() {
-    let alloc = BumpAlloc::new();
+    let alloc = BumpAlloc::with_size(1024 * 1024 * 4);
     let mut linked_list = std::collections::LinkedList::new_in(alloc);
     for i in 0..100u8 {
         linked_list.push_back(Something::from(i))
     }
 }
 
-#[cfg(feature = "nightly")]
+#[cfg(all(feature = "nightly", not(miri)))]
 #[test]
 fn linked_list_u16_max() {
-    let alloc = BumpAlloc::new();
+    let alloc = BumpAlloc::with_size(1024 * 1024 * 4);
     let mut linked_list = std::collections::LinkedList::new_in(alloc);
     for i in 0..=u16::MAX {
         linked_list.push_back(Something::from(i))
     }
+}
+
+#[cfg(not(miri))]
+#[test]
+fn concurrent_boxes() {
+    shuttle::check_random(
+        || {
+            let a = Box::new(BumpAlloc::with_size(1024 * 1024 * 4));
+            let a2 = Box::leak(a);
+            let th1 = shuttle::thread::spawn(|| {
+                boxes::<300>(a2);
+            });
+            let th2 = shuttle::thread::spawn(|| {
+                boxes::<300>(a2);
+            });
+            let th3 = shuttle::thread::spawn(|| {
+                boxes::<300>(a2);
+            });
+            th1.join().unwrap();
+            th2.join().unwrap();
+            th3.join().unwrap();
+        },
+        1000,
+    );
 }
