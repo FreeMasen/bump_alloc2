@@ -79,7 +79,9 @@ jobs:
         components: miri
     - name: test
       run: > 
-        cargo +nightly miri test --lib &&
-        cargo +nightly miri test --test ad_hoc --features nightly
-        cargo +nightly miri test --test new --features nightly
-        cargo +nightly miri test --test with_size --features nightly
+        rustup override set nightly-2025-09-16 &&
+        cargo miri setup &&
+        cargo miri test --lib &&
+        cargo miri test --test ad_hoc --features nightly
+        cargo miri test --test new --features nightly
+        cargo miri test --test with_size --features nightly
