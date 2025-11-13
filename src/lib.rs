@@ -244,7 +244,7 @@ fn reset_alloc(b: &BumpAlloc) {
 mod tests {
     use super::*;
 
-    #[cfg(not(loom))]
+    #[cfg(all(not(loom), not(miri)))]
     static CONCURRENT_ITER: std::sync::LazyLock<usize> = std::sync::LazyLock::new(|| {
         std::env::var("BA2_CONCURRENT_ITERS")
             .map_err(|_| ())

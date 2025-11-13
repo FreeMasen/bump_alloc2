@@ -79,9 +79,15 @@ jobs:
         components: miri
     - name: test
       run: > 
+        echo "setting up override" &&
         rustup override set nightly-2025-09-16 &&
+        echo "setting up miri" &&
         cargo miri setup &&
+        echo "running lib test" &&
         cargo miri test --lib &&
-        cargo miri test --test ad_hoc --features nightly
-        cargo miri test --test new --features nightly
+        echo "running ad_hoc tests" &&
+        cargo miri test --test ad_hoc --features nightly &&
+        echo "running new tests" &&
+        cargo miri test --test new --features nightly &&
+        echo "running with_size tests" &&
         cargo miri test --test with_size --features nightly
