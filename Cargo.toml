@@ -1,7 +1,7 @@
 [package]
 license = "CC0-1.0"
 name = "bump_alloc2"
-version = "0.1.0"
+version = "0.2.0"
 authors = [
     "Neil Henning <sheredom@gmail.com>",
     "Robert Masen <r.f.masen@gmail.com>"
